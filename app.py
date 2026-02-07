@@ -210,6 +210,6 @@ async def query_documents(
 # Health Check
 # =========================
 
-@app.get("/")
+@app.get("/health")
 def health_check():
     return {"status": "LawChatAI RAG system running"}
