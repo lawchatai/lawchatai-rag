@@ -18,11 +18,12 @@ from llama_index.llms.gemini import Gemini
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core.prompts import PromptTemplate
 
+
 # =========================
-# ENV & CONFIG
+# ENV
 # =========================
 
-load_dotenv()  # loads GOOGLE_API_KEY from .env
+load_dotenv()
 
 UPLOAD_DIR = "uploads"
 STORAGE_DIR = "storage"
@@ -32,18 +33,34 @@ os.makedirs(STORAGE_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".docx"}
 
+
 # =========================
-# LlamaIndex Settings
+# FAST STARTUP → LAZY AI INIT
 # =========================
 
-Settings.llm = Gemini(
-    model="models/gemini-2.5-flash",
-    temperature=0.1,
-)
+_ai_initialized = False
 
-Settings.embed_model = HuggingFaceEmbedding(
-    model_name="sentence-transformers/paraphrase-MPNet-base-v2"
-)
+
+def init_ai():
+    global _ai_initialized
+
+    if _ai_initialized:
+        return
+
+    print("🚀 Initializing AI models...")
+
+    Settings.llm = Gemini(
+        model="models/gemini-2.5-flash",
+        temperature=0.1,
+    )
+
+    Settings.embed_model = HuggingFaceEmbedding(
+        model_name="sentence-transformers/paraphrase-MPNet-base-v2"
+    )
+
+    _ai_initialized = True
+    print("✅ AI initialized")
+
 
 # =========================
 # STRICT LEGAL PROMPT
@@ -74,13 +91,14 @@ Answer:
 )
 
 # =========================
-# FastAPI App
+# FASTAPI
 # =========================
 
 app = FastAPI(title="LawChatAI – Secure RAG Service")
 
+
 # =========================
-# CORS (IMPORTANT)
+# CORS
 # =========================
 
 app.add_middleware(
@@ -88,20 +106,22 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "https://lawchatai.in",
-        "*"
+        "*",
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
+
 # =========================
-# Helpers
+# HELPERS
 # =========================
 
 def validate_user_id(user_id: str):
     if not re.match(r"^[a-zA-Z0-9_-]{3,50}$", user_id):
         raise ValueError("Invalid user_id")
+
 
 def get_user_dirs(user_id: str):
     user_upload_dir = os.path.join(UPLOAD_DIR, user_id)
@@ -124,14 +144,15 @@ def build_or_load_index(user_id: str):
 
     raise ValueError("Index does not exist")
 
+
 # =========================
-# API: Upload Document
+# API: UPLOAD
 # =========================
 
 @app.post("/upload")
 async def upload_document(
     user_id: str = Form(...),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
 ):
     try:
         validate_user_id(user_id)
@@ -142,8 +163,11 @@ async def upload_document(
     if ext not in ALLOWED_EXTENSIONS:
         return JSONResponse(
             {"error": "Unsupported file type"},
-            status_code=400
+            status_code=400,
         )
+
+    # 🔥 init AI here, not at startup
+    init_ai()
 
     user_upload_dir, user_storage_dir = get_user_dirs(user_id)
     file_path = os.path.join(user_upload_dir, file.filename)
@@ -162,20 +186,28 @@ async def upload_document(
 
     return {
         "status": "success",
-        "message": f"{file.filename} uploaded and indexed"
+        "message": f"{file.filename} uploaded and indexed",
     }
 
+
 # =========================
-# API: Query Documents
+# API: QUERY
 # =========================
 
 @app.post("/query")
 async def query_documents(
     user_id: str = Form(...),
-    question: str = Form(...)
+    question: str = Form(...),
 ):
     try:
         validate_user_id(user_id)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    # 🔥 init AI here, not at startup
+    init_ai()
+
+    try:
         index = build_or_load_index(user_id)
     except ValueError:
         return JSONResponse(
@@ -185,7 +217,7 @@ async def query_documents(
 
     query_engine = index.as_query_engine(
         similarity_top_k=4,
-        text_qa_template=LEGAL_QA_PROMPT
+        text_qa_template=LEGAL_QA_PROMPT,
     )
 
     response = query_engine.query(question)
@@ -197,19 +229,20 @@ async def query_documents(
 
         citations.append({
             "page": page,
-            "score": round(node.score, 3)
+            "score": round(node.score, 3),
         })
 
     return {
         "question": question,
         "answer": response.response,
-        "citations": citations
+        "citations": citations,
     }
 
+
 # =========================
-# Health Check
+# HEALTH
 # =========================
 
-@app.get("/health")
+@app.get("/")
 def health_check():
     return {"status": "LawChatAI RAG system running"}
