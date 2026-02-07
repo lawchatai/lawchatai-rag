@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+python-multipart
+llama-index
+llama-index-llms-gemini
+llama_index.embeddings.huggingface
+llama_index.core.prompts
+faiss-cpu
+pypdf
+
