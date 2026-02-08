@@ -55,8 +55,14 @@ def init_ai():
         temperature=0.1,
     )
 
+    # Settings.embed_model = HuggingFaceEmbedding(
+    #     model_name="sentence-transformers/paraphrase-MiniLM-L3-v2"
+    # )
+
     Settings.embed_model = HuggingFaceEmbedding(
-        model_name="sentence-transformers/paraphrase-MiniLM-L3-v2"
+        model_name="intfloat/e5-small-v2",
+        query_instruction="query: ",
+        text_instruction="passage: ",
     )
 
     _ai_initialized = True
