@@ -1,18 +1,22 @@
 # ---- Base image ----
 FROM python:3.12-slim
 
-# ---- System deps ----
+# ---- System deps (needed for torch / faiss / pdf parsing) ----
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
     curl \
+    libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
     && rm -rf /var/lib/apt/lists/*
 
 # ---- Environment ----
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# HuggingFace cache (important for model preloading)
+# HuggingFace cache (model preloading + runtime)
 ENV HF_HOME=/root/.cache/huggingface
 ENV TRANSFORMERS_CACHE=/root/.cache/huggingface
 ENV SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface
@@ -20,23 +24,23 @@ ENV SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface
 # ---- Workdir ----
 WORKDIR /app
 
-# ---- Install deps first (layer caching) ----
+# ---- Install Python deps first (better layer caching) ----
 COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# ---- 🔥 Pre-download embedding model (Option 3) ----
+# ---- 🔥 Pre-download embedding model (OPTION 3) ----
 RUN python - <<EOF
 from sentence_transformers import SentenceTransformer
 SentenceTransformer("sentence-transformers/paraphrase-MiniLM-L3-v2")
 print("✅ Embedding model cached")
 EOF
 
-# ---- Copy app code ----
+# ---- Copy application code ----
 COPY . .
 
-# ---- Expose port (local use) ----
+# ---- Expose port (Render ignores, local use only) ----
 EXPOSE 8000
 
-# ---- Start FastAPI ----
+# ---- Start FastAPI (Render-compatible) ----
 CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]
