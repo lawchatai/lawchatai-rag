@@ -7,3 +7,4 @@ llama-index-llms-gemini
 llama-index-embeddings-google-genai
 
 google-genai
+python-multipart
