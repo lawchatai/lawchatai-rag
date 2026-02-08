@@ -14,14 +14,15 @@ from llama_index.core import (
     Settings,
 )
 
+from llama_index.llms.gemini import Gemini
+from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.core.prompts import PromptTemplate
 
-
 # =========================
-# ENV
+# ENV & CONFIG
 # =========================
 
-load_dotenv()
+load_dotenv()  # loads GOOGLE_API_KEY from .env
 
 UPLOAD_DIR = "uploads"
 STORAGE_DIR = "storage"
@@ -31,42 +32,21 @@ os.makedirs(STORAGE_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".docx"}
 
-
 # =========================
-# FAST STARTUP → LAZY AI INIT
+# LlamaIndex Settings
 # =========================
 
-_ai_initialized = False
+Settings.llm = Gemini(
+    model="models/gemini-2.5-flash",
+    temperature=0.1,
+)
 
+# 🔥 Gemini / Google embedding
+from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 
-def init_ai():
-    global _ai_initialized
-
-    if _ai_initialized:
-        return
-
-    print("🚀 Initializing AI models...")
-
-    from llama_index.llms.gemini import Gemini
-    from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-
-    Settings.llm = Gemini(
-        model="models/gemini-2.5-flash",
-        temperature=0.1,
-    )
-
-    # Settings.embed_model = HuggingFaceEmbedding(
-    #     model_name="sentence-transformers/paraphrase-MiniLM-L3-v2"
-    # )
-
-    Settings.embed_model = HuggingFaceEmbedding(
-        model_name="intfloat/e5-small-v2",
-        query_instruction="query: ",
-        text_instruction="passage: ",
-    )
-
-    _ai_initialized = True
-    print("✅ AI initialized")
+Settings.embed_model = GoogleGenAIEmbedding(
+    model_name="gemini-embedding-001"
+)
 
 
 # =========================
@@ -98,25 +78,13 @@ Answer:
 )
 
 # =========================
-# FASTAPI
+# FastAPI App
 # =========================
 
-from contextlib import asynccontextmanager
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    print("🌱 App startup — warming AI")
-    init_ai()
-    yield
-    print("🛑 App shutdown")
-
-app = FastAPI(
-    title="LawChatAI – Secure RAG Service",
-    lifespan=lifespan,
-)
+app = FastAPI(title="LawChatAI – Secure RAG Service")
 
 # =========================
-# CORS
+# CORS (IMPORTANT)
 # =========================
 
 app.add_middleware(
@@ -124,22 +92,20 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "https://lawchatai.in",
-        "*",
+        "*"
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
-
 # =========================
-# HELPERS
+# Helpers
 # =========================
 
 def validate_user_id(user_id: str):
     if not re.match(r"^[a-zA-Z0-9_-]{3,50}$", user_id):
         raise ValueError("Invalid user_id")
-
 
 def get_user_dirs(user_id: str):
     user_upload_dir = os.path.join(UPLOAD_DIR, user_id)
@@ -162,15 +128,14 @@ def build_or_load_index(user_id: str):
 
     raise ValueError("Index does not exist")
 
-
 # =========================
-# API: UPLOAD
+# API: Upload Document
 # =========================
 
 @app.post("/upload")
 async def upload_document(
     user_id: str = Form(...),
-    file: UploadFile = File(...),
+    file: UploadFile = File(...)
 ):
     try:
         validate_user_id(user_id)
@@ -181,11 +146,8 @@ async def upload_document(
     if ext not in ALLOWED_EXTENSIONS:
         return JSONResponse(
             {"error": "Unsupported file type"},
-            status_code=400,
+            status_code=400
         )
-
-    # 🔥 init AI here, not at startup
-    init_ai()
 
     user_upload_dir, user_storage_dir = get_user_dirs(user_id)
     file_path = os.path.join(user_upload_dir, file.filename)
@@ -204,28 +166,20 @@ async def upload_document(
 
     return {
         "status": "success",
-        "message": f"{file.filename} uploaded and indexed",
+        "message": f"{file.filename} uploaded and indexed"
     }
 
-
 # =========================
-# API: QUERY
+# API: Query Documents
 # =========================
 
 @app.post("/query")
 async def query_documents(
     user_id: str = Form(...),
-    question: str = Form(...),
+    question: str = Form(...)
 ):
     try:
         validate_user_id(user_id)
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-
-    # 🔥 init AI here, not at startup
-    init_ai()
-
-    try:
         index = build_or_load_index(user_id)
     except ValueError:
         return JSONResponse(
@@ -235,7 +189,7 @@ async def query_documents(
 
     query_engine = index.as_query_engine(
         similarity_top_k=4,
-        text_qa_template=LEGAL_QA_PROMPT,
+        text_qa_template=LEGAL_QA_PROMPT
     )
 
     response = query_engine.query(question)
@@ -247,30 +201,23 @@ async def query_documents(
 
         citations.append({
             "page": page,
-            "score": round(node.score, 3),
+            "score": round(node.score, 3)
         })
 
     return {
         "question": question,
         "answer": response.response,
-        "citations": citations,
+        "citations": citations
     }
 
-
 # =========================
-# HEALTH
+# Health Check
 # =========================
 
-@app.get("/")
+@app.get("/health")
 def health_check():
     return {"status": "LawChatAI RAG system running"}
 
-@app.get("/live")
-def live():
-    return {"status": "alive"}
 
-@app.get("/ready")
-def ready():
-    if not _ai_initialized:
-        return JSONResponse({"status": "warming"}, status_code=503)
-    return {"status": "ready"}
+
+
