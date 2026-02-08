@@ -14,8 +14,6 @@ from llama_index.core import (
     Settings,
 )
 
-from llama_index.llms.gemini import Gemini
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core.prompts import PromptTemplate
 
 
@@ -49,14 +47,13 @@ def init_ai():
 
     print("🚀 Initializing AI models...")
 
+    from llama_index.llms.gemini import Gemini
+    from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+
     Settings.llm = Gemini(
         model="models/gemini-2.5-flash",
         temperature=0.1,
     )
-
-    # Settings.embed_model = HuggingFaceEmbedding(
-    #     model_name="sentence-transformers/paraphrase-MPNet-base-v2"
-    # )
 
     Settings.embed_model = HuggingFaceEmbedding(
         model_name="sentence-transformers/paraphrase-MiniLM-L3-v2"
@@ -64,6 +61,7 @@ def init_ai():
 
     _ai_initialized = True
     print("✅ AI initialized")
+
 
 
 # =========================
