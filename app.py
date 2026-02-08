@@ -63,7 +63,6 @@ def init_ai():
     print("✅ AI initialized")
 
 
-
 # =========================
 # STRICT LEGAL PROMPT
 # =========================
@@ -96,8 +95,19 @@ Answer:
 # FASTAPI
 # =========================
 
-app = FastAPI(title="LawChatAI – Secure RAG Service")
+from contextlib import asynccontextmanager
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("🌱 App startup — warming AI")
+    init_ai()
+    yield
+    print("🛑 App shutdown")
+
+app = FastAPI(
+    title="LawChatAI – Secure RAG Service",
+    lifespan=lifespan,
+)
 
 # =========================
 # CORS
@@ -248,3 +258,13 @@ async def query_documents(
 @app.get("/")
 def health_check():
     return {"status": "LawChatAI RAG system running"}
+
+@app.get("/live")
+def live():
+    return {"status": "alive"}
+
+@app.get("/ready")
+def ready():
+    if not _ai_initialized:
+        return JSONResponse({"status": "warming"}, status_code=503)
+    return {"status": "ready"}
