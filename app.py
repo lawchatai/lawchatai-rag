@@ -72,19 +72,23 @@ ALLOWED_EXTENSIONS = {".pdf", ".txt", ".docx"}
 Settings.chunk_size = 512
 Settings.chunk_overlap = 50
 
-Settings.llm = Gemini(
-    model="models/gemini-2.5-flash",
-    temperature=0.1,
-)
 
 # Settings.embed_model = GoogleGenAIEmbedding(
 #     model_name="gemini-embedding-001",
 #     output_dimensionality=768
 # )
 
-Settings.embed_model = HuggingFaceEmbedding(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
+def init_models():
+    if Settings.llm is None:
+        Settings.llm = Gemini(
+            model="models/gemini-2.5-flash",
+            temperature=0.1,
+        )
+
+    if Settings.embed_model is None:
+        Settings.embed_model = HuggingFaceEmbedding(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
 
 # =========================
 # STRICT LEGAL PROMPT
@@ -185,6 +189,7 @@ async def upload_document(
     user_id: str = Form(...),
     file: UploadFile = File(...),
 ):
+    init_models()
     try:
         validate_user_id(user_id)
     except ValueError as e:
@@ -282,6 +287,7 @@ async def query_documents(
     user_id: str = Form(...),
     question: str = Form(...),
 ):
+    init_models()
     try:
         validate_user_id(user_id)
         index = load_user_index_from_r2(user_id)
