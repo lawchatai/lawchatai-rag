@@ -1,11 +1,12 @@
 fastapi
 uvicorn
 python-dotenv
+python-multipart
+boto3
 
 llama-index-core
 llama-index-llms-gemini
-llama-index-embeddings-google-genai
 
-google-genai
-python-multipart
-boto3
+llama-index-embeddings-huggingface
+sentence-transformers
+torch
