@@ -17,6 +17,7 @@ from llama_index.core import (
 
 from llama_index.llms.gemini import Gemini
 from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core.prompts import PromptTemplate
 from llama_index.core.node_parser import SentenceSplitter
 
@@ -65,9 +66,13 @@ Settings.llm = Gemini(
     temperature=0.1,
 )
 
-Settings.embed_model = GoogleGenAIEmbedding(
-    model_name="gemini-embedding-001",
-    output_dimensionality=768
+# Settings.embed_model = GoogleGenAIEmbedding(
+#     model_name="gemini-embedding-001",
+#     output_dimensionality=768
+# )
+
+Settings.embed_model = HuggingFaceEmbedding(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
 
 # =========================
