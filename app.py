@@ -31,6 +31,18 @@ from botocore.client import Config
 
 load_dotenv()
 
+required_env = [
+    "R2_ACCOUNT_ID",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+    "R2_BUCKET_NAME",
+    "GEMINI_API_KEY",
+]
+
+for var in required_env:
+    if not os.getenv(var):
+        raise ValueError(f"Missing environment variable: {var}")
+
 
 # =========================
 # R2 CONFIG
