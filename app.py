@@ -66,9 +66,9 @@ Settings.llm = Gemini(
 )
 
 Settings.embed_model = GoogleGenAIEmbedding(
-    model_name="gemini-embedding-001"
+    model_name="gemini-embedding-001",
+    output_dimensionality=768
 )
-
 
 # =========================
 # STRICT LEGAL PROMPT
