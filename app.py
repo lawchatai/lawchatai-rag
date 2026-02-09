@@ -50,12 +50,6 @@ s3 = boto3.client(
 )
 
 
-UPLOAD_DIR = "uploads"
-STORAGE_DIR = "storage"
-
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(STORAGE_DIR, exist_ok=True)
-
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".docx"}
 
 
@@ -297,8 +291,7 @@ async def query_documents(
         meta = node.node.metadata
         citations.append({
             "file": meta.get("file_name", "unknown"),
-            "page": meta.get("page_label") or meta.get("page") or "N/A",
-            "score": round(node.score, 3),
+            "page": meta.get("page_label") or meta.get("page") or "N/A"
         })
 
     return {
