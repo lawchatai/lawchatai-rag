@@ -16,7 +16,6 @@ from llama_index.core import (
 )
 
 from llama_index.llms.gemini import Gemini
-from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core.prompts import PromptTemplate
 from llama_index.core.node_parser import SentenceSplitter
