@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+import tempfile
 
 from llama_index.core import (
     SimpleDirectoryReader,
@@ -17,12 +18,37 @@ from llama_index.core import (
 from llama_index.llms.gemini import Gemini
 from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.core.prompts import PromptTemplate
+from llama_index.core.node_parser import SentenceSplitter
+
+import hashlib
+import boto3
+from botocore.client import Config
+
 
 # =========================
-# ENV & CONFIG
+# ENV
 # =========================
 
-load_dotenv()  # loads GOOGLE_API_KEY from .env
+load_dotenv()
+
+
+# =========================
+# R2 CONFIG
+# =========================
+
+R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID")
+R2_ACCESS_KEY = os.getenv("R2_ACCESS_KEY_ID")
+R2_SECRET_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
+R2_BUCKET = os.getenv("R2_BUCKET_NAME")
+
+s3 = boto3.client(
+    "s3",
+    endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+    aws_access_key_id=R2_ACCESS_KEY,
+    aws_secret_access_key=R2_SECRET_KEY,
+    config=Config(signature_version="s3v4"),
+)
+
 
 UPLOAD_DIR = "uploads"
 STORAGE_DIR = "storage"
@@ -32,17 +58,18 @@ os.makedirs(STORAGE_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".docx"}
 
+
 # =========================
-# LlamaIndex Settings
+# GLOBAL LLAMA SETTINGS (MVP FAST)
 # =========================
+
+Settings.chunk_size = 512
+Settings.chunk_overlap = 50
 
 Settings.llm = Gemini(
     model="models/gemini-2.5-flash",
     temperature=0.1,
 )
-
-# 🔥 Gemini / Google embedding
-from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 
 Settings.embed_model = GoogleGenAIEmbedding(
     model_name="gemini-embedding-001"
@@ -65,7 +92,7 @@ STRICT RULES:
   "The document does not contain this information."
 - Do NOT provide legal advice or opinions
 - Keep answers factual and concise
-- Cite page numbers when possible
+- Cite page numbers when available
 
 Context:
 {context_str}
@@ -77,35 +104,32 @@ Answer:
 """
 )
 
-# =========================
-# FastAPI App
-# =========================
-
-app = FastAPI(title="LawChatAI – Secure RAG Service")
+def get_file_hash(file_bytes: bytes):
+    return hashlib.sha256(file_bytes).hexdigest()
 
 # =========================
-# CORS (IMPORTANT)
+# APP
 # =========================
+
+app = FastAPI(title="LawChatAI – MVP RAG")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://lawchatai.in",
-        "*"
-    ],
+    allow_origins=["*"],  # tighten later
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
+
 # =========================
-# Helpers
+# HELPERS
 # =========================
 
 def validate_user_id(user_id: str):
     if not re.match(r"^[a-zA-Z0-9_-]{3,50}$", user_id):
         raise ValueError("Invalid user_id")
+
 
 def get_user_dirs(user_id: str):
     user_upload_dir = os.path.join(UPLOAD_DIR, user_id)
@@ -117,25 +141,39 @@ def get_user_dirs(user_id: str):
     return user_upload_dir, user_storage_dir
 
 
-def build_or_load_index(user_id: str):
-    _, user_storage_dir = get_user_dirs(user_id)
+def load_user_index_from_r2(user_id: str):
+    index_prefix = f"users/{user_id}/index/"
+    # local_index_dir = f"/tmp/index_{user_id}"
+    local_index_dir = os.path.join(tempfile.gettempdir(), f"index_{user_id}")
 
-    if os.path.exists(os.path.join(user_storage_dir, "docstore.json")):
-        storage_context = StorageContext.from_defaults(
-            persist_dir=user_storage_dir
-        )
-        return load_index_from_storage(storage_context)
+    os.makedirs(local_index_dir, exist_ok=True)
 
-    raise ValueError("Index does not exist")
+    objs = s3.list_objects_v2(Bucket=R2_BUCKET, Prefix=index_prefix)
+
+    if "Contents" not in objs:
+        return None
+
+    for obj in objs["Contents"]:
+        key = obj["Key"]
+        local_file = os.path.join(local_index_dir, key.split("/")[-1])
+        s3.download_file(R2_BUCKET, key, local_file)
+
+    storage_context = StorageContext.from_defaults(
+        persist_dir=local_index_dir
+    )
+
+    return load_index_from_storage(storage_context)
+
+
 
 # =========================
-# API: Upload Document
+# API: UPLOAD
 # =========================
 
 @app.post("/upload")
 async def upload_document(
     user_id: str = Form(...),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
 ):
     try:
         validate_user_id(user_id)
@@ -144,52 +182,112 @@ async def upload_document(
 
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
-        return JSONResponse(
-            {"error": "Unsupported file type"},
-            status_code=400
-        )
+        return JSONResponse({"error": "Unsupported file type"}, status_code=400)
 
-    user_upload_dir, user_storage_dir = get_user_dirs(user_id)
-    file_path = os.path.join(user_upload_dir, file.filename)
+    # read file
+    file_bytes = await file.read()
+    file_hash = get_file_hash(file_bytes)
 
-    with open(file_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    # R2 paths
+    file_key = f"users/{user_id}/files/{file_hash}_{file.filename}"
+    index_prefix = f"users/{user_id}/index/"
 
-    documents = SimpleDirectoryReader(user_upload_dir).load_data()
+    # check if already exists
+    try:
+        s3.head_object(Bucket=R2_BUCKET, Key=file_key)
+        return {
+            "status": "success",
+            "message": "File already uploaded. Skipping re-index."
+        }
+    except:
+        pass  # not exists, continue
 
-    index = VectorStoreIndex.from_documents(
-        documents,
-        show_progress=True,
+    # upload file
+    s3.put_object(
+        Bucket=R2_BUCKET,
+        Key=file_key,
+        Body=file_bytes,
     )
 
-    index.storage_context.persist(persist_dir=user_storage_dir)
+    # we must download locally temporarily for llamaindex
+    # temp_path = f"/tmp/{file_hash}_{file.filename}"
+
+    temp_dir = tempfile.gettempdir()
+    temp_path = os.path.join(temp_dir, f"{file_hash}_{file.filename}")
+
+    with open(temp_path, "wb") as f:
+        f.write(file_bytes)
+
+    documents = SimpleDirectoryReader(input_files=[temp_path]).load_data()
+
+    # download existing index if exists
+    local_index_dir = f"/tmp/index_{user_id}"
+    os.makedirs(local_index_dir, exist_ok=True)
+
+    try:
+        objs = s3.list_objects_v2(Bucket=R2_BUCKET, Prefix=index_prefix)
+        for obj in objs.get("Contents", []):
+            key = obj["Key"]
+            local_file = os.path.join(local_index_dir, key.split("/")[-1])
+            s3.download_file(R2_BUCKET, key, local_file)
+
+        storage_context = StorageContext.from_defaults(
+            persist_dir=local_index_dir
+        )
+        index = load_index_from_storage(storage_context)
+
+        parser = SentenceSplitter()
+
+        nodes = parser.get_nodes_from_documents(documents)
+
+        index.insert_nodes(nodes)
+
+    except:
+        index = VectorStoreIndex.from_documents(documents)
+
+    # persist locally
+    index.storage_context.persist(persist_dir=local_index_dir)
+
+    # upload index back to R2
+    for fname in os.listdir(local_index_dir):
+        s3.upload_file(
+            os.path.join(local_index_dir, fname),
+            R2_BUCKET,
+            f"{index_prefix}{fname}",
+        )
 
     return {
         "status": "success",
-        "message": f"{file.filename} uploaded and indexed"
+        "message": "Uploaded & indexed"
     }
 
+
+
 # =========================
-# API: Query Documents
+# API: QUERY
 # =========================
 
 @app.post("/query")
 async def query_documents(
     user_id: str = Form(...),
-    question: str = Form(...)
+    question: str = Form(...),
 ):
     try:
         validate_user_id(user_id)
-        index = build_or_load_index(user_id)
+        index = load_user_index_from_r2(user_id)
+
+        if not index:
+            raise ValueError()
+
     except ValueError:
         return JSONResponse(
-            {"error": "No documents indexed for this user"},
+            {"error": "No documents indexed"},
             status_code=400,
         )
 
     query_engine = index.as_query_engine(
-        similarity_top_k=4,
-        text_qa_template=LEGAL_QA_PROMPT
+        similarity_top_k=3,  # faster
+        text_qa_template=LEGAL_QA_PROMPT,
     )
 
     response = query_engine.query(question)
@@ -197,27 +295,22 @@ async def query_documents(
     citations = []
     for node in response.source_nodes:
         meta = node.node.metadata
-        page = meta.get("page_label") or meta.get("page") or "N/A"
-
         citations.append({
-            "page": page,
-            "score": round(node.score, 3)
+            "file": meta.get("file_name", "unknown"),
+            "page": meta.get("page_label") or meta.get("page") or "N/A",
+            "score": round(node.score, 3),
         })
 
     return {
-        "question": question,
         "answer": response.response,
-        "citations": citations
+        "citations": citations,
     }
 
+
 # =========================
-# Health Check
+# HEALTH
 # =========================
 
-@app.get("/health")
-def health_check():
-    return {"status": "LawChatAI RAG system running"}
-
-
-
-
+@app.get("/")
+def health():
+    return {"status": "running"}

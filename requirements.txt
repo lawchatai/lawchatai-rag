@@ -8,3 +8,4 @@ llama-index-embeddings-google-genai
 
 google-genai
 python-multipart
+boto3
