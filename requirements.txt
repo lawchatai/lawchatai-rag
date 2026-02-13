@@ -7,6 +7,6 @@ langchain-text-splitters
 faiss-cpu
 sentence-transformers
 boto3
-python-dotenvv
+python-dotenv
 pypdf
 docx2txt
