@@ -1,29 +1,28 @@
 import os
 import re
+import hashlib
+import tempfile
 import shutil
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-import tempfile
 
-from llama_index.core import (
-    SimpleDirectoryReader,
-    VectorStoreIndex,
-    StorageContext,
-    load_index_from_storage,
-    Settings,
-)
-
-from llama_index.llms.gemini import Gemini
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.core.prompts import PromptTemplate
-from llama_index.core.node_parser import SentenceSplitter
-
-import hashlib
 import boto3
 from botocore.client import Config
 
+# LangChain
+from langchain_community.vectorstores import FAISS
+from langchain_community.document_loaders import (
+    PyPDFLoader,
+    TextLoader,
+    Docx2txtLoader,
+)
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.chains import RetrievalQA
 
 # =========================
 # ENV
@@ -43,7 +42,6 @@ for var in required_env:
     if not os.getenv(var):
         raise ValueError(f"Missing environment variable: {var}")
 
-
 # =========================
 # R2 CONFIG
 # =========================
@@ -61,80 +59,21 @@ s3 = boto3.client(
     config=Config(signature_version="s3v4"),
 )
 
-
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".docx"}
-
-
-# =========================
-# GLOBAL LLAMA SETTINGS (MVP FAST)
-# =========================
-
-Settings.chunk_size = 512
-Settings.chunk_overlap = 50
-
-
-# Settings.embed_model = GoogleGenAIEmbedding(
-#     model_name="gemini-embedding-001",
-#     output_dimensionality=768
-# )
-
-def init_models():
-    if Settings.llm is None:
-        Settings.llm = Gemini(
-            model="models/gemini-2.5-flash",
-            temperature=0.1,
-        )
-
-    if Settings.embed_model is None:
-        Settings.embed_model = HuggingFaceEmbedding(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
-
-# =========================
-# STRICT LEGAL PROMPT
-# =========================
-
-LEGAL_QA_PROMPT = PromptTemplate(
-    """
-You are a legal document analysis assistant.
-
-STRICT RULES:
-- Answer ONLY using the provided document context
-- Do NOT use outside knowledge
-- Do NOT guess or infer
-- If the answer is not explicitly stated, respond exactly with:
-  "The document does not contain this information."
-- Do NOT provide legal advice or opinions
-- Keep answers factual and concise
-- Cite page numbers when available
-
-Context:
-{context_str}
-
-Question:
-{query_str}
-
-Answer:
-"""
-)
-
-def get_file_hash(file_bytes: bytes):
-    return hashlib.sha256(file_bytes).hexdigest()
 
 # =========================
 # APP
 # =========================
 
-app = FastAPI(title="LawChatAI – MVP RAG")
+app = FastAPI(title="LawChatAI – LangChain MVP")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten later
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # =========================
 # HELPERS
@@ -145,39 +84,35 @@ def validate_user_id(user_id: str):
         raise ValueError("Invalid user_id")
 
 
-def get_user_dirs(user_id: str):
-    user_upload_dir = os.path.join(UPLOAD_DIR, user_id)
-    user_storage_dir = os.path.join(STORAGE_DIR, user_id)
-
-    os.makedirs(user_upload_dir, exist_ok=True)
-    os.makedirs(user_storage_dir, exist_ok=True)
-
-    return user_upload_dir, user_storage_dir
+def get_file_hash(file_bytes: bytes):
+    return hashlib.sha256(file_bytes).hexdigest()
 
 
-def load_user_index_from_r2(user_id: str):
-    index_prefix = f"users/{user_id}/index/"
-    # local_index_dir = f"/tmp/index_{user_id}"
-    local_index_dir = os.path.join(tempfile.gettempdir(), f"index_{user_id}")
-
-    os.makedirs(local_index_dir, exist_ok=True)
-
-    objs = s3.list_objects_v2(Bucket=R2_BUCKET, Prefix=index_prefix)
-
-    if "Contents" not in objs:
-        return None
-
-    for obj in objs["Contents"]:
-        key = obj["Key"]
-        local_file = os.path.join(local_index_dir, key.split("/")[-1])
-        s3.download_file(R2_BUCKET, key, local_file)
-
-    storage_context = StorageContext.from_defaults(
-        persist_dir=local_index_dir
+def init_models():
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash",
+        temperature=0.1,
     )
 
-    return load_index_from_storage(storage_context)
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        model_kwargs={"device": "cpu"},
+    )
 
+    return llm, embeddings
+
+
+def load_document(temp_path: str, ext: str):
+    if ext == ".pdf":
+        loader = PyPDFLoader(temp_path)
+    elif ext == ".txt":
+        loader = TextLoader(temp_path)
+    elif ext == ".docx":
+        loader = Docx2txtLoader(temp_path)
+    else:
+        raise ValueError("Unsupported file type")
+
+    return loader.load()
 
 
 # =========================
@@ -189,7 +124,6 @@ async def upload_document(
     user_id: str = Form(...),
     file: UploadFile = File(...),
 ):
-    init_models()
     try:
         validate_user_id(user_id)
     except ValueError as e:
@@ -199,71 +133,53 @@ async def upload_document(
     if ext not in ALLOWED_EXTENSIONS:
         return JSONResponse({"error": "Unsupported file type"}, status_code=400)
 
-    # read file
     file_bytes = await file.read()
     file_hash = get_file_hash(file_bytes)
 
-    # R2 paths
     file_key = f"users/{user_id}/files/{file_hash}_{file.filename}"
     index_prefix = f"users/{user_id}/index/"
 
-    # check if already exists
+    # Check if already exists
     try:
         s3.head_object(Bucket=R2_BUCKET, Key=file_key)
-        return {
-            "status": "success",
-            "message": "File already uploaded. Skipping re-index."
-        }
+        return {"status": "success", "message": "File already uploaded"}
     except:
-        pass  # not exists, continue
+        pass
 
-    # upload file
+    # Upload file to R2
     s3.put_object(
         Bucket=R2_BUCKET,
         Key=file_key,
         Body=file_bytes,
     )
 
-    # we must download locally temporarily for llamaindex
-    # temp_path = f"/tmp/{file_hash}_{file.filename}"
-
+    # Save temporarily
     temp_dir = tempfile.gettempdir()
     temp_path = os.path.join(temp_dir, f"{file_hash}_{file.filename}")
 
     with open(temp_path, "wb") as f:
         f.write(file_bytes)
 
-    documents = SimpleDirectoryReader(input_files=[temp_path]).load_data()
+    # Load + Split
+    llm, embeddings = init_models()
+    docs = load_document(temp_path, ext)
 
-    # download existing index if exists
-    local_index_dir = f"/tmp/index_{user_id}"
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=50
+    )
+
+    documents = splitter.split_documents(docs)
+
+    # Create FAISS
+    vectorstore = FAISS.from_documents(documents, embeddings)
+
+    local_index_dir = os.path.join(temp_dir, f"faiss_{user_id}")
     os.makedirs(local_index_dir, exist_ok=True)
 
-    try:
-        objs = s3.list_objects_v2(Bucket=R2_BUCKET, Prefix=index_prefix)
-        for obj in objs.get("Contents", []):
-            key = obj["Key"]
-            local_file = os.path.join(local_index_dir, key.split("/")[-1])
-            s3.download_file(R2_BUCKET, key, local_file)
+    vectorstore.save_local(local_index_dir)
 
-        storage_context = StorageContext.from_defaults(
-            persist_dir=local_index_dir
-        )
-        index = load_index_from_storage(storage_context)
-
-        parser = SentenceSplitter()
-
-        nodes = parser.get_nodes_from_documents(documents)
-
-        index.insert_nodes(nodes)
-
-    except:
-        index = VectorStoreIndex.from_documents(documents)
-
-    # persist locally
-    index.storage_context.persist(persist_dir=local_index_dir)
-
-    # upload index back to R2
+    # Upload FAISS to R2
     for fname in os.listdir(local_index_dir):
         s3.upload_file(
             os.path.join(local_index_dir, fname),
@@ -271,11 +187,12 @@ async def upload_document(
             f"{index_prefix}{fname}",
         )
 
+    os.remove(temp_path)
+
     return {
         "status": "success",
-        "message": "Uploaded & indexed"
+        "message": "Uploaded & indexed",
     }
-
 
 
 # =========================
@@ -287,38 +204,47 @@ async def query_documents(
     user_id: str = Form(...),
     question: str = Form(...),
 ):
-    init_models()
     try:
         validate_user_id(user_id)
-        index = load_user_index_from_r2(user_id)
-
-        if not index:
-            raise ValueError()
-
     except ValueError:
-        return JSONResponse(
-            {"error": "No documents indexed"},
-            status_code=400,
-        )
+        return JSONResponse({"error": "Invalid user_id"}, status_code=400)
 
-    query_engine = index.as_query_engine(
-        similarity_top_k=3,  # faster
-        text_qa_template=LEGAL_QA_PROMPT,
+    llm, embeddings = init_models()
+
+    temp_dir = tempfile.gettempdir()
+    local_index_dir = os.path.join(temp_dir, f"faiss_{user_id}")
+    os.makedirs(local_index_dir, exist_ok=True)
+
+    objs = s3.list_objects_v2(
+        Bucket=R2_BUCKET,
+        Prefix=f"users/{user_id}/index/",
     )
 
-    response = query_engine.query(question)
+    if "Contents" not in objs:
+        return JSONResponse({"error": "No documents indexed"}, status_code=400)
 
-    citations = []
-    for node in response.source_nodes:
-        meta = node.node.metadata
-        citations.append({
-            "file": meta.get("file_name", "unknown"),
-            "page": meta.get("page_label") or meta.get("page") or "N/A"
-        })
+    for obj in objs["Contents"]:
+        key = obj["Key"]
+        local_file = os.path.join(local_index_dir, key.split("/")[-1])
+        s3.download_file(R2_BUCKET, key, local_file)
+
+    vectorstore = FAISS.load_local(
+        local_index_dir,
+        embeddings,
+        allow_dangerous_deserialization=True
+    )
+
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=llm,
+        retriever=retriever,
+    )
+
+    result = qa_chain.run(question)
 
     return {
-        "answer": response.response,
-        "citations": citations,
+        "answer": result,
     }
 
 
