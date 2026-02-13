@@ -19,10 +19,11 @@ from langchain_community.document_loaders import (
     TextLoader,
     Docx2txtLoader,
 )
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.chains import RetrievalQA
+from langchain_community.embeddings import HuggingFaceEmbeddings
+
 
 # =========================
 # ENV
@@ -90,7 +91,7 @@ def get_file_hash(file_bytes: bytes):
 
 def init_models():
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-2.5-flash",
         temperature=0.1,
     )
 
@@ -236,15 +237,36 @@ async def query_documents(
 
     retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        retriever=retriever,
-    )
+    docs = retriever.get_relevant_documents(question)
 
-    result = qa_chain.run(question)
+    if not docs:
+        return {"answer": "No relevant information found in the document."}
+
+    context = "\n\n".join([doc.page_content for doc in docs])
+
+    prompt = f"""
+    You are a legal document analysis assistant.
+
+    STRICT RULES:
+    - Answer ONLY using the provided context
+    - Do NOT use outside knowledge
+    - If the answer is not explicitly stated, respond exactly with:
+      "The document does not contain this information."
+    - Keep answers factual and concise
+
+    Context:
+    {context}
+
+    Question:
+    {question}
+
+    Answer:
+    """
+
+    response = llm.invoke(prompt)
 
     return {
-        "answer": result,
+        "answer": response.content,
     }
 
 
