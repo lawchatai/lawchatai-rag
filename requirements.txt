@@ -1,17 +1,17 @@
-fastapi==0.129.0
-uvicorn==0.40.0
+fastapi
+uvicorn
+
 boto3
-botocore
 python-dotenv
 
-langchain==1.2.10
-langchain-community==0.4.1
-langchain-core==1.2.12
-langchain-google-genai==4.2.0
-langchain-text-splitters==1.1.0
+langchain
+langchain-community
+langchain-text-splitters
 
 sentence-transformers==2.7.0
-faiss-cpu==1.7.4
+torch==2.2.2
+
+chromadb==0.4.24
 
 pypdf
 docx2txt
