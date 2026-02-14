@@ -14,6 +14,9 @@ langchain-google-genai
 
 sentence-transformers==2.7.0
 
+numpy<2
+langchain-huggingface
+
 torch==2.2.2+cpu
 
 chromadb==0.4.24
