@@ -258,17 +258,17 @@ async def query_documents(
             embedding_function=embeddings
         )
 
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-        docs = retriever.get_relevant_documents(question)
+        # Direct similarity search instead of retriever
+        docs = vectorstore.similarity_search(question, k=3)
 
         if not docs:
             return {"answer": "The document does not contain this information."}
 
-        context = "\n\n".join([doc.page_content for doc in docs])
+        context = "\n\n".join([getattr(doc, "page_content", "") for doc in docs if doc is not None])
+        if not context.strip():
+            return {"answer": "The document does not contain this information."}
 
         prompt = f"""
-You are a legal document analysis assistant.
-
 STRICT RULES:
 - Answer ONLY using the provided context
 - If the answer is not explicitly stated, respond exactly with:
