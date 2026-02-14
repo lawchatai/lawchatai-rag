@@ -5,6 +5,7 @@ uvicorn
 
 boto3
 python-dotenv
+python-multipart
 
 langchain
 langchain-community
